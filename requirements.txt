@@ -1,0 +1,6 @@
+streamlit>=1.36
+scikit-learn>=1.4
+nltk>=3.8
+gensim>=4.3
+numpy>=1.26
+sentence-transformers>=3.0
