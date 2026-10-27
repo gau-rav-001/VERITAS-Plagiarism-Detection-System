@@ -200,9 +200,14 @@ class WordEmbeddingModel:
     _kv = None
 
     @property
-    def kv(self):
         if self._kv is None:
-            from gensim.models import KeyedVectors
+            try:
+                from gensim.models import KeyedVectors
+            except ImportError as err:
+                raise ImportError(
+                    "gensim is required for Word2Vec/GloVe KeyedVectors. "
+                    "Install gensim or select SBERT (Sentence-BERT) as the similarity backend."
+                ) from err
 
             if self.path.endswith(".kv"):
                 self._kv = KeyedVectors.load(self.path)
