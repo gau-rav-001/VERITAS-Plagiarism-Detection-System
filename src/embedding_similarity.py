@@ -200,6 +200,7 @@ class WordEmbeddingModel:
     _kv = None
 
     @property
+    def kv(self):
         if self._kv is None:
             try:
                 from gensim.models import KeyedVectors
