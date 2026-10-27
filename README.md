@@ -1,118 +1,98 @@
-# Plagiarism Detection using NLP
+# NLP Plagiarism Detection System
 
-A hybrid **document-to-document plagiarism detector** built with Python, Streamlit,
-scikit-learn, NLTK and gensim. It combines two complementary signals:
+A multi-signal **plagiarism verification and detection engine** built with Python, Streamlit, scikit-learn, NLTK, Sentence-BERT, and Plotly for academic document comparison and repository auditing.
 
-1. **Lexical similarity (TF-IDF + cosine similarity)** – captures exact word overlap.
-2. **Semantic similarity** – captures meaning even when the text is paraphrased
-   using different words. Two backends are supported:
-   - **SBERT** (sentence-transformers, recommended) – a transformer encoder that
-     gives state-of-the-art semantic similarity.
-   - **Word2Vec / GloVe** – SIF-weighted averages of pre-trained word vectors
-     (a lighter, dependency-free option).
+It combines multi-tiered lexical analysis and deep semantic representations:
 
-The two scores are combined into a single similarity score and mapped to a verdict
-(Original / Low / Moderate / High / Severe).
+1. **Lexical Signals**:
+   - **TF-IDF & Cosine Similarity**: Captures vocabulary overlap and document-level distribution.
+   - **N-Gram Jaccard & Containment**: Evaluates Bi-gram and Tri-gram phrase containment (Turnitin-style).
+   - **Longest Common Subsequence (LCS)**: Measures contiguous verbatim token sequence matches.
+2. **Syntactic & Paraphrase Signals**:
+   - **Part-of-Speech (POS) Syntactic Alignment**: Detects grammatical structure copying where sentences follow identical templates.
+   - **WordNet Synonym Substitution Mapping**: Identifies synonym-swapped words between matched sentence pairs.
+3. **Deep Semantic Signals**:
+   - **SBERT (Sentence-BERT - `all-MiniLM-L6-v2`)**: Contextual transformer encoder that flags meaning-preserving paraphrases.
+   - **Word2Vec / GloVe**: SIF-weighted word vector averaging with principal component removal.
 
-## Features
+The signals are fused into an overall similarity score mapped to a standardized verdict (**Original / Low / Moderate / High / Severe**).
 
-- Paste or upload two documents (`.txt`, `.md`) and compare them.
-- Sample document pairs included for quick demos (identical copy, paraphrase, unrelated).
-- Sentence-level match detection with highlighted similar sentence pairs.
-- Two combination modes: **Max** (report the strongest signal) and **Weighted blend**.
-- Adjustable match threshold; graceful TF-IDF-only fallback if no semantic model loads.
+---
 
-## Project structure
+## ✨ Features
+
+- **Multi-Format Document Ingestion**: Upload `.txt`, `.md`, `.pdf`, and `.docx` (Word) documents directly.
+- **Side-by-Side Synchronized Text Highlighting**: Turnitin-style visual comparison:
+  - 🔴 **Red**: Verbatim exact match ($> 80\%$ lexical similarity).
+  - 🟡 **Yellow**: Paraphrased match captured by semantic embeddings.
+- **Interactive Similarity Heatmap**: Plotly interactive matrix mapping Document A sentences against Document B sentences with hover previews.
+- **Visual Analytics**: Interactive gauge meter for overall risk level and donut chart showing the composition of Verbatim vs. Paraphrased vs. Original content.
+- **Corpus / Repository Scanner (1-to-Many Mode)**: Scan a student submission against an entire folder or uploaded archive of past assignments/papers to automatically pinpoint the original source.
+- **Exportable Plagiarism Verification Report**: Generate and download a standalone `.html` report with full metadata, verdict badges, and matched evidence tables.
+
+---
+
+## 📁 Project Structure
 
 ```
-plagiarism-detector/
-├── app.py                        # Streamlit web app
-├── requirements.txt
+NLP-Plagiarism-Detection-System/
+├── app.py                     # Streamlit web application with Plotly analytics
+├── requirements.txt           # Environment dependencies
+├── README.md                  # Project documentation
 ├── src/
-│   ├── preprocessing.py          # cleaning, tokenization, lemmatization
-│   ├── tfidf_similarity.py       # TF-IDF + cosine similarity
-│   ├── embedding_similarity.py   # SBERT + Word2Vec/GloVe semantic backends
-│   └── detector.py               # orchestrates scoring + verdict
+│   ├── preprocessing.py       # Cleaning, tokenization, lemmatization, sentence splitter
+│   ├── tfidf_similarity.py    # TF-IDF vectorization & cosine similarity
+│   ├── nlp_analysis.py        # N-grams, LCS, WordNet synonyms, POS syntactic matching
+│   ├── embedding_similarity.py# SBERT & Word2Vec/GloVe semantic backends
+│   ├── detector.py            # Signal fusion, verdict mapping, sentence alignment
+│   ├── file_reader.py         # Multi-format document parser (.pdf, .docx, .txt, .md)
+│   └── report_generator.py    # Self-contained HTML inspection report generator
 ├── scripts/
-│   └── download_embeddings.py    # downloads a Word2Vec/GloVe model (optional)
+│   └── download_embeddings.py # Pre-trained GloVe vector downloader (optional)
 ├── data/
-│   ├── samples/                  # sample documents for testing
-│   └── embeddings/               # downloaded word vectors (git-ignored)
+│   ├── samples/               # Test document sample pairs
+│   └── embeddings/            # Downloaded word vectors (git-ignored)
 └── tests/
-    └── test_detector.py          # unit tests
+    └── test_detector.py       # Comprehensive unit test suite (17 tests)
 ```
 
-## Setup
+---
 
+## 🚀 Setup & Execution
+
+### 1. Activate Virtual Environment
 ```bash
-pip install -r requirements.txt
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
 ```
 
-NLTK data (tokenizer, stopwords, WordNet) is downloaded automatically on first run.
+### 2. Install Dependencies
+```bash
+python -m pip install -r requirements.txt
+```
 
-### Semantic models
-
-- **SBERT (default):** the `all-MiniLM-L6-v2` model (~90 MB) downloads automatically
-  from Hugging Face on the first run.
-- **Word2Vec/GloVe (optional):** download once with
-
-  ```bash
-  python scripts/download_embeddings.py
-  ```
-
-  (default `glove-wiki-gigaword-50`, ~66 MB; alternative `glove-twitter-25`).
-
-Without any semantic model the app still works in TF-IDF-only mode.
-
-## Run
-
+### 3. Run the Web Application
 ```bash
 streamlit run app.py
 ```
+Open the browser URL (default: `http://localhost:8501`).
 
-Open the printed URL (default `http://localhost:8501`).
+---
 
-## Usage
+## 🧪 Testing
 
-1. Put the **reference** document in "Document A" and the **suspect** document in
-   "Document B" (paste or upload, or pick a sample pair from the sidebar).
-2. Pick the semantic backend and combination mode in the sidebar if desired.
-3. Click **Detect Plagiarism**.
-
-The results show the combined score, the verdict, the individual TF-IDF and
-semantic scores, and a list of similar sentence pairs.
-
-## How it works
-
-- **Preprocessing** (`src/preprocessing.py`): lowercase, strip punctuation, remove
-  stopwords and short tokens, lemmatize words (verb-first, then noun).
-- **TF-IDF** (`src/tfidf_similarity.py`): both documents are vectorized with
-  `TfidfVectorizer` and compared with cosine similarity.
-- **Semantic** (`src/embedding_similarity.py`):
-  - *SBERT* encodes documents/sentences into embeddings and compares them with
-    cosine similarity.
-  - *Word2Vec/GloVe* represents each text as a SIF-weighted average of word vectors
-    with the dominant principal components removed (reduces GloVe's known
-    anisotropy/hubness problem).
-- **Detector** (`src/detector.py`): combines the two scores with either
-  `max(lexical, semantic)` (default) or `tfidf_weight * lexical + (1 - tfidf_weight) * semantic`,
-  then thresholds the result into a verdict. Sentence pairs above the match
-  threshold are reported.
-
-## Sample results (built-in sample pair 1 vs the variants)
-
-| Document B        | TF-IDF | Semantic (SBERT) | Verdict         |
-|-------------------|--------|------------------|-----------------|
-| Identical copy    | 0.98   | 1.00             | Severe          |
-| Paraphrase        | 0.17   | 0.74             | High            |
-| Unrelated topic   | 0.01   | 0.06             | Original        |
-
-## Tests
+Run the full test suite with:
 
 ```bash
-python tests/test_detector.py
-# or
 python -m unittest tests.test_detector -v
 ```
 
-Tests that need a semantic model are skipped automatically when one is unavailable.
+---
+
+## 📊 Sample Results
+
+| Suspect Document Type | TF-IDF | Semantic (SBERT) | N-Gram Containment | Verdict |
+|---|---|---|---|---|
+| **Identical copy** | 0.98 | 1.00 | 95%+ | **Severe Plagiarism** |
+| **Paraphrased text** | 0.17 | 0.74 | 20% | **High Plagiarism** |
+| **Unrelated topic** | 0.01 | 0.06 | 0% | **Original** |

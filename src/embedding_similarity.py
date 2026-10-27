@@ -12,7 +12,7 @@ Two backends share a common interface:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -26,8 +26,44 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / denom)
 
 
+_SBERT_MODEL_CACHE: Dict[str, Any] = {}
+_SBERT_EMBEDDING_CACHE: Dict[Tuple[str, str], np.ndarray] = {}
+
+
+def clear_embedding_cache():
+    """Clear in-memory SBERT embedding cache."""
+    _SBERT_EMBEDDING_CACHE.clear()
+
+
+def chunk_sentences(
+    sentences: List[str], window_size: int = 3, stride: int = 2
+) -> List[str]:
+    """Group sentences into sliding windows to capture local discourse without exceeding token limits.
+
+    Args:
+        sentences: List of extracted sentence strings.
+        window_size: Number of consecutive sentences per chunk (default 3).
+        stride: Step size between sliding windows (default 2 for 33% overlap).
+
+    Returns:
+        List of windowed sentence chunk strings.
+    """
+    if not sentences:
+        return []
+    if len(sentences) <= window_size:
+        return [" ".join(sentences)]
+    chunks: List[str] = []
+    for i in range(0, len(sentences), stride):
+        win = sentences[i : i + window_size]
+        if win:
+            chunks.append(" ".join(win))
+        if i + window_size >= len(sentences):
+            break
+    return chunks
+
+
 class SbertSimilarity:
-    """Semantic similarity using a sentence-transformer (SBERT) model."""
+    """Semantic similarity using Sentence-BERT with model & embedding caching and window chunking."""
 
     name = "SBERT"
 
@@ -38,36 +74,107 @@ class SbertSimilarity:
     @property
     def model(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            if self.model_name in _SBERT_MODEL_CACHE:
+                self._model = _SBERT_MODEL_CACHE[self.model_name]
+            else:
+                from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name)
+                self._model = SentenceTransformer(self.model_name)
+                _SBERT_MODEL_CACHE[self.model_name] = self._model
         return self._model
 
-    def document_similarity(self, doc_a: str, doc_b: str) -> float:
-        from sentence_transformers import util
+    def encode_texts(
+        self, texts: List[str], batch_size: int = 32, normalize: bool = True
+    ) -> np.ndarray:
+        """Encode a list of texts into normalized embedding vectors with caching and batching."""
+        if not texts:
+            return np.empty((0, 384), dtype=np.float32)
 
-        embeddings = self.model.encode(
-            [doc_a, doc_b], normalize_embeddings=True, show_progress_bar=False
-        )
-        return float(util.cos_sim(embeddings[0], embeddings[1]).item())
+        results: List[Optional[np.ndarray]] = [None] * len(texts)
+        missing_indices: List[int] = []
+        missing_texts: List[str] = []
+
+        for idx, text in enumerate(texts):
+            key = (self.model_name, text)
+            if key in _SBERT_EMBEDDING_CACHE:
+                results[idx] = _SBERT_EMBEDDING_CACHE[key]
+            else:
+                missing_indices.append(idx)
+                missing_texts.append(text)
+
+        if missing_texts:
+            encoded_batches = self.model.encode(
+                missing_texts,
+                batch_size=batch_size,
+                normalize_embeddings=normalize,
+                show_progress_bar=False,
+            )
+            for m_idx, emb in zip(missing_indices, encoded_batches):
+                emb_arr = np.asarray(emb, dtype=np.float32)
+                _SBERT_EMBEDDING_CACHE[(self.model_name, texts[m_idx])] = emb_arr
+                results[m_idx] = emb_arr
+
+        return np.stack([r for r in results if r is not None])
+
+    def document_similarity(self, doc_a: str, doc_b: str) -> float:
+        """Compute document similarity handling both short texts and long documents via sentence windows."""
+        if not doc_a.strip() or not doc_b.strip():
+            return 0.0
+
+        sentences_a = split_sentences(doc_a)
+        sentences_b = split_sentences(doc_b)
+
+        # For short snippets (3 or fewer sentences), encode directly
+        if len(sentences_a) <= 3 and len(sentences_b) <= 3:
+            embeddings = self.encode_texts([doc_a, doc_b])
+            return float(np.clip(np.dot(embeddings[0], embeddings[1]), 0.0, 1.0))
+
+        # For long documents: chunk by sentence windows to prevent 256/512 token truncation
+        chunks_a = chunk_sentences(sentences_a, window_size=3, stride=2)
+        chunks_b = chunk_sentences(sentences_b, window_size=3, stride=2)
+
+        emb_a = self.encode_texts(chunks_a, batch_size=32)
+        emb_b = self.encode_texts(chunks_b, batch_size=32)
+
+        if len(emb_a) == 0 or len(emb_b) == 0:
+            return 0.0
+
+        # Matrix of chunk similarities (num_chunks_a, num_chunks_b)
+        sim_mat = emb_a @ emb_b.T
+
+        # Mean pooled normalized document embeddings
+        mean_a = np.mean(emb_a, axis=0)
+        norm_a = np.linalg.norm(mean_a)
+        if norm_a > 0:
+            mean_a = mean_a / norm_a
+
+        mean_b = np.mean(emb_b, axis=0)
+        norm_b = np.linalg.norm(mean_b)
+        if norm_b > 0:
+            mean_b = mean_b / norm_b
+
+        pooled_sim = float(np.dot(mean_a, mean_b))
+
+        # Asymmetric suspect chunk coverage (what fraction of suspect chunks find strong alignment)
+        max_suspect_sims = np.max(sim_mat, axis=0)
+        suspect_coverage = float(np.mean(max_suspect_sims))
+
+        # Max coverage allows catching partial plagiarism in long documents
+        score = max(pooled_sim, suspect_coverage)
+        return float(np.clip(score, 0.0, 1.0))
 
     def sentence_similarities(
         self, doc_a: str, doc_b: str
     ) -> Tuple[List[float], List[float], Dict[str, float]]:
-        from sentence_transformers import util
-
+        """Compute pairwise sentence similarity matrix with cached batch encoding."""
         sentences_a = split_sentences(doc_a)
         sentences_b = split_sentences(doc_b)
         if not sentences_a or not sentences_b:
             return [], [], {}
 
-        emb_a = self.model.encode(
-            sentences_a, normalize_embeddings=True, show_progress_bar=False
-        )
-        emb_b = self.model.encode(
-            sentences_b, normalize_embeddings=True, show_progress_bar=False
-        )
-        matrix = util.cos_sim(emb_a, emb_b).cpu().numpy()
+        emb_a = self.encode_texts(sentences_a, batch_size=32)
+        emb_b = self.encode_texts(sentences_b, batch_size=32)
+        matrix = emb_a @ emb_b.T
 
         pair_scores: Dict[str, float] = {}
         for i in range(len(sentences_a)):
